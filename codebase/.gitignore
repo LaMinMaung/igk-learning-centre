@@ -1,0 +1,44 @@
+# ─── PocketBase data directories (environment-specific, never commit) ─────────
+../pb_data_dev/
+../pb_data_stg/
+../pb_data_prod/
+../pb_data/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+**/*.local  # Simplified from *.local (covers subdirs too)
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ─── Environment files ────────────────────────────────────────────────────────
+# .local variants may contain REAL secrets — always ignore them
+*.env.local
+*.env.*.local
+
+# Committed env files (.env.development / .env.staging / .env.production /
+# .env.example) contain NO real secrets — they ARE tracked in git so the
+# whole team shares the same baseline configuration. If you ever add real
+# API keys, move them into the corresponding *.local file instead.
+
+# Vite-specific
+**/.vite
+**.vite_copied
+.vite_status

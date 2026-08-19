@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+@theme {
+  /* Dark Gray Theme - IGK Learning Centre */
+  /* Background Colors - Based on Gray-900 and Gray-800 */
+  --color-gray-950: #030712;
+  --color-gray-900: #111827;
+  --color-gray-800: #1F2937;
+  --color-gray-700: #374151;
+  --color-gray-600: #4B5563;
+  --color-gray-500: #6B7280;
+  --color-gray-400: #9CA3AF;
+  --color-gray-300: #D1D5DB;
+  --color-gray-200: #E5E7EB;
+  --color-gray-100: #F3F4F6;
+  --color-gray-50: #F9FAFB;
+  
+  /* Red Accent: #B91C1C to #DC2626 - Primary Buttons */
+  --color-red-50: #FEF2F2;
+  --color-red-100: #FEE2E2;
+  --color-red-200: #FECACA;
+  --color-red-300: #FCA5A5;
+  --color-red-400: #F87171;
+  --color-red-500: #EF4444;
+  --color-red-600: #DC2626;
+  --color-red-700: #B91C1C;
+  --color-red-800: #991B1B;
+  --color-red-900: #7F1D1D;
+  
+  /* Amber/Gold Accent: #FBBF24 - Highlights and Secondary Elements */
+  --color-amber-50: #FFFBEB;
+  --color-amber-100: #FEF3C7;
+  --color-amber-200: #FDE68A;
+  --color-amber-300: #FCD34D;
+  --color-amber-400: #FBBF24;
+  --color-amber-500: #F59E0B;
+  --color-amber-600: #D97706;
+  --color-amber-700: #B45309;
+  --color-amber-800: #92400E;
+  --color-amber-900: #78350F;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  
+  /* Animations */
+  --animate-fade-in: fade-in 0.5s ease-out;
+  --animate-slide-up: slide-up 0.6s ease-out;
+  --animate-scale: scale 0.3s ease-out;
+  --animate-glow: glow 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(251, 191, 36, 0.3); }
+  50% { box-shadow: 0 0 40px rgba(251, 191, 36, 0.6); }
+}
+
+/* ── Resource Library: prose styles for rendered markdown ──────────────────── */
+.ged-prose { color: #e5e7eb; line-height: 1.8; font-size: 0.9375rem; }
+.ged-prose h1 { font-size: 1.65rem; font-weight: 800; color: #f9fafb; margin-bottom: 0.875rem; padding-bottom: 0.625rem; border-bottom: 1px solid #374151; }
+.ged-prose h2 { font-size: 1.2rem; font-weight: 700; color: #fcd34d; margin-top: 2rem; margin-bottom: 0.625rem; }
+.ged-prose h3 { font-size: 1rem; font-weight: 600; color: #d1d5db; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+.ged-prose h4 { font-size: 0.9rem; font-weight: 600; color: #9ca3af; margin-top: 1.25rem; margin-bottom: 0.375rem; }
+.ged-prose p { margin-bottom: 0.875rem; }
+.ged-prose ul { list-style: disc; padding-left: 1.5rem; margin-bottom: 0.875rem; }
+.ged-prose ol { list-style: decimal; padding-left: 1.5rem; margin-bottom: 0.875rem; }
+.ged-prose li { margin-bottom: 0.3rem; }
+.ged-prose strong { color: #f9fafb; font-weight: 700; }
+.ged-prose em { font-style: italic; color: #d1d5db; }
+.ged-prose table { width: 100%; border-collapse: collapse; margin: 1.25rem 0 1.5rem; font-size: 0.875rem; }
+.ged-prose thead tr { border-bottom: 2px solid #4b5563; }
+.ged-prose th { padding: 0.6rem 0.875rem; text-align: left; font-weight: 700; color: #fbbf24; background: #111827; white-space: nowrap; }
+.ged-prose td { padding: 0.5rem 0.875rem; border-bottom: 1px solid #374151; vertical-align: top; }
+.ged-prose tbody tr:last-child td { border-bottom: none; }
+.ged-prose tbody tr:hover td { background: #1f2937; }
+.ged-prose code { background: #1f2937; color: #f59e0b; padding: 0.1rem 0.375rem; border-radius: 0.25rem; font-size: 0.83em; font-family: 'Courier New', monospace; }
+.ged-prose pre { background: #111827; border: 1px solid #374151; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 1rem; }
+.ged-prose pre code { background: transparent; color: #e5e7eb; padding: 0; font-size: 0.875em; }
+.ged-prose hr { border: none; border-top: 1px solid #374151; margin: 1.75rem 0; }
+.ged-prose blockquote { border-left: 3px solid #d97706; padding-left: 1rem; color: #9ca3af; margin: 1rem 0; font-style: italic; }
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: #111827;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #FBBF24;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #FCD34D;
+}

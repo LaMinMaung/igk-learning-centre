@@ -1,0 +1,194 @@
+name: Deploy → Production (mydomain.com)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggers on push to `main`.
+# Uses a GitHub Environment named "production" — add required reviewers there
+# to enforce manual approval before every production deployment.
+#
+# Deployment flow:
+#   validate → build → [manual approval] → deploy → verify
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   PROD_HOST             IP address or hostname of your production server
+#   PROD_USER             SSH username (deploy)
+#   PROD_SSH_KEY          Private SSH key (production deploy key)
+#   PROD_PB_URL           https://api.mydomain.com
+#
+# Required GitHub Environment (Settings → Environments → production):
+#   - Add required reviewers (yourself + any team members)
+#   - Restrict to branch: main only
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY-TO-PRODUCTION to confirm'
+        required: true
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  WEB_ROOT: /var/www/igk-prod
+  PB_DIR:   /opt/pocketbase-production
+
+jobs:
+  # ─── Validate ──────────────────────────────────────────────────────────────
+  validate:
+    name: Validate environment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify manual confirmation (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${{ inputs.confirm }}" != "DEPLOY-TO-PRODUCTION" ]; then
+            echo "❌ Confirmation mismatch. Type exactly: DEPLOY-TO-PRODUCTION"
+            exit 1
+          fi
+
+      - name: Check required secrets
+        run: |
+          missing=""
+          [ -z "${{ secrets.PROD_HOST }}"    ] && missing="$missing PROD_HOST"
+          [ -z "${{ secrets.PROD_USER }}"    ] && missing="$missing PROD_USER"
+          [ -z "${{ secrets.PROD_SSH_KEY }}" ] && missing="$missing PROD_SSH_KEY"
+          [ -z "${{ secrets.PROD_PB_URL }}"  ] && missing="$missing PROD_PB_URL"
+          if [ -n "$missing" ]; then
+            echo "❌ Missing GitHub Secrets:$missing"
+            exit 1
+          fi
+          echo "✅ All required secrets present"
+
+      - name: Validate env file
+        run: bash scripts/validate-env.sh production
+
+  # ─── Build ─────────────────────────────────────────────────────────────────
+  build:
+    name: Build (production)
+    runs-on: ubuntu-latest
+    needs: validate
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      timestamp: ${{ steps.meta.outputs.timestamp }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: codebase/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: codebase
+
+      - name: Inject build metadata
+        id: meta
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          VERSION=$(node -p "require('./codebase/package.json').version")
+          sed -i "s|VITE_BUILD_TIMESTAMP=.*|VITE_BUILD_TIMESTAMP=${TIMESTAMP}|" codebase/.env.production
+          sed -i "s|VITE_APP_VERSION=.*|VITE_APP_VERSION=${VERSION}|"           codebase/.env.production
+          echo "version=${VERSION}"   >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "  Production build: v${VERSION} @ ${TIMESTAMP}"
+
+      - name: Inject production PocketBase URL from secret
+        run: |
+          sed -i "s|VITE_POCKETBASE_URL=.*|VITE_POCKETBASE_URL=${{ secrets.PROD_PB_URL }}|" \
+            codebase/.env.production
+
+      - name: Build for production
+        run: npx vite build --mode production
+        working-directory: codebase
+
+      # Retain artifact 90 days — allows rollback to any previous build
+      - name: Upload dist artifact (90-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-dist-${{ github.sha }}
+          path: codebase/dist/
+          retention-days: 90
+
+  # ─── Manual approval gate ──────────────────────────────────────────────────
+  # This job runs in the "production" GitHub Environment.
+  # Add required reviewers in Settings → Environments → production.
+  # The workflow PAUSES here until a reviewer approves.
+  deploy:
+    name: Deploy to mydomain.com
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production        # ← THIS triggers the approval gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: production-dist-${{ github.sha }}
+          path: dist/
+
+      - name: Setup SSH key
+        run: |
+          install -m 600 -D /dev/null ~/.ssh/id_deploy
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy frontend (rsync dist/ → server)
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=no" \
+            dist/ \
+            ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}:${{ env.WEB_ROOT }}/
+
+      - name: Sync migrations to production server
+        run: |
+          rsync -avz \
+            -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=no" \
+            pb_migrations/ \
+            ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}:${{ env.PB_DIR }}/pb_migrations/
+
+      - name: Apply PocketBase migrations
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              -o StrictHostKeyChecking=no \
+              ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }} \
+            "${{ env.PB_DIR }}/pocketbase migrate up \
+              --dir ${{ env.PB_DIR }}/pb_data \
+              --migrationsDir ${{ env.PB_DIR }}/pb_migrations"
+
+      - name: Restart PocketBase production service
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              -o StrictHostKeyChecking=no \
+              ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }} \
+            "sudo systemctl restart pocketbase-production"
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
+
+      - name: Create Git release tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          TAG="v${{ needs.build.outputs.version }}-$(date +%Y%m%d%H%M)-${GITHUB_SHA::7}"
+          git tag "$TAG"
+          git push origin "$TAG" || echo "Tag push skipped (token may lack write)"
+
+      - name: Deployment summary
+        run: |
+          echo "✅ Production deployment complete"
+          echo "   URL     : https://mydomain.com"
+          echo "   Version : ${{ needs.build.outputs.version }}"
+          echo "   Built   : ${{ needs.build.outputs.timestamp }}"
+          echo "   SHA     : ${{ github.sha }}"
+          echo "   Approved by: ${{ github.actor }}"

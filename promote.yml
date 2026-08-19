@@ -1,0 +1,85 @@
+name: Promote Staging → Production
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Run this workflow manually after QA sign-off on staging.
+# It merges `staging` → `main`, which automatically triggers production.yml.
+#
+# Promotion flow:
+#   1. QA tests on tst.mydomain.com ✅
+#   2. Run this workflow (Actions → Promote → Run workflow)
+#   3. Reviewer approves the production environment gate
+#   4. Code goes live on mydomain.com
+#
+# Required: GITHUB_TOKEN must have write permission to Contents + Pull Requests.
+#   Settings → Actions → General → Workflow permissions → Read and write
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: 'What does this release include? (shown in PR body)'
+        required: true
+        default: 'Promote staging to production'
+
+jobs:
+  promote:
+    name: Open promotion PR staging → main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify staging is ahead of main
+        run: |
+          git fetch origin staging main
+          STAGING_SHA=$(git rev-parse origin/staging)
+          MAIN_SHA=$(git rev-parse origin/main)
+          if [ "$STAGING_SHA" = "$MAIN_SHA" ]; then
+            echo "⚠  staging and main are identical — nothing to promote."
+            exit 1
+          fi
+          echo "  staging: $STAGING_SHA"
+          echo "  main:    $MAIN_SHA"
+
+      - name: Show commits to be promoted
+        run: |
+          echo "── Commits being promoted ──"
+          git log --oneline origin/main..origin/staging
+
+      - name: Create promotion pull request
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `🚀 Promote staging → production (${new Date().toISOString().slice(0,10)})`,
+              head:  'staging',
+              base:  'main',
+              body: [
+                '## Production Promotion',
+                '',
+                '**Release notes:**',
+                '${{ inputs.release_notes }}',
+                '',
+                '**Pre-merge checklist:**',
+                '- [ ] QA testing completed on https://tst.mydomain.com',
+                '- [ ] No console errors in staging',
+                '- [ ] Database migrations tested on staging',
+                '- [ ] Reviewed by team lead',
+                '',
+                '**After merging:**',
+                'The `production.yml` workflow will trigger automatically.',
+                'A reviewer must approve the GitHub Environment gate before deploy starts.',
+                '',
+                `*Triggered by: ${{ github.actor }}*`,
+              ].join('\n'),
+              draft: false,
+            });
+            console.log(`✅ PR created: ${pr.html_url}`);
+            core.summary.addRaw(`## Promotion PR Created\n[View PR →](${pr.html_url})`);
+            await core.summary.write();

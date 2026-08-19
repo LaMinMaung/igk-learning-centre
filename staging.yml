@@ -1,0 +1,156 @@
+name: Deploy → Staging (tst.mydomain.com)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggers on every push to the `staging` branch.
+# Validates → Builds → rsyncs dist/ → Applies migrations → Restarts PocketBase
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   STAGING_HOST          IP address or hostname of your staging server
+#   STAGING_USER          SSH username (deploy)
+#   STAGING_SSH_KEY       Private SSH key (the deploy key pair's private half)
+#   STAGING_PB_URL        https://api.tst.mydomain.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  WEB_ROOT: /var/www/igk-staging
+  PB_DIR:   /opt/pocketbase-staging
+
+jobs:
+  # ─── Validate ──────────────────────────────────────────────────────────────
+  validate:
+    name: Validate environment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required secrets
+        run: |
+          missing=""
+          [ -z "${{ secrets.STAGING_HOST }}"    ] && missing="$missing STAGING_HOST"
+          [ -z "${{ secrets.STAGING_USER }}"    ] && missing="$missing STAGING_USER"
+          [ -z "${{ secrets.STAGING_SSH_KEY }}" ] && missing="$missing STAGING_SSH_KEY"
+          [ -z "${{ secrets.STAGING_PB_URL }}"  ] && missing="$missing STAGING_PB_URL"
+          if [ -n "$missing" ]; then
+            echo "❌ Missing GitHub Secrets:$missing"
+            echo "   Add them at: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "✅ All required secrets present"
+
+      - name: Validate env file
+        run: bash scripts/validate-env.sh staging
+
+  # ─── Build ─────────────────────────────────────────────────────────────────
+  build:
+    name: Build (staging)
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: codebase/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: codebase
+
+      - name: Inject build metadata into env file
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          VERSION=$(node -p "require('./codebase/package.json').version")
+          sed -i "s|VITE_BUILD_TIMESTAMP=.*|VITE_BUILD_TIMESTAMP=${TIMESTAMP}|" codebase/.env.staging
+          sed -i "s|VITE_APP_VERSION=.*|VITE_APP_VERSION=${VERSION}|"           codebase/.env.staging
+          echo "  Build: v${VERSION} @ ${TIMESTAMP}"
+
+      - name: Inject PocketBase URL from secret (overrides committed placeholder)
+        run: |
+          sed -i "s|VITE_POCKETBASE_URL=.*|VITE_POCKETBASE_URL=${{ secrets.STAGING_PB_URL }}|" \
+            codebase/.env.staging
+
+      - name: Build for staging
+        run: npx vite build --mode staging
+        working-directory: codebase
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-dist-${{ github.sha }}
+          path: codebase/dist/
+          retention-days: 14
+
+  # ─── Deploy ────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to tst.mydomain.com
+    runs-on: ubuntu-latest
+    needs: build
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-dist-${{ github.sha }}
+          path: dist/
+
+      - name: Setup SSH key
+        run: |
+          install -m 600 -D /dev/null ~/.ssh/id_deploy
+          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.STAGING_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy frontend (rsync dist/ → server)
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=no" \
+            dist/ \
+            ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}:${{ env.WEB_ROOT }}/
+
+      - name: Sync migrations to server
+        run: |
+          rsync -avz \
+            -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=no" \
+            pb_migrations/ \
+            ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}:${{ env.PB_DIR }}/pb_migrations/
+
+      - name: Apply PocketBase migrations
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              -o StrictHostKeyChecking=no \
+              ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} \
+            "${{ env.PB_DIR }}/pocketbase migrate up \
+              --dir ${{ env.PB_DIR }}/pb_data \
+              --migrationsDir ${{ env.PB_DIR }}/pb_migrations"
+
+      - name: Restart PocketBase staging service
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              -o StrictHostKeyChecking=no \
+              ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} \
+            "sudo systemctl restart pocketbase-staging"
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
+
+      - name: Deployment summary
+        run: |
+          echo "✅ Staging deployment complete"
+          echo "   URL     : https://tst.mydomain.com"
+          echo "   SHA     : ${{ github.sha }}"
+          echo "   Actor   : ${{ github.actor }}"
+          echo "   Trigger : ${{ github.event_name }}"
